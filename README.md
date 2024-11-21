@@ -53,3 +53,25 @@ To use this dashboard:
 1. Clone the repository:  
    ```bash
    git clone https://github.com/your-repo/soccer-dashboard.git
+
+2. Set up:
+   ```bash
+   python3 --version
+   
+   ```bash
+   python3 -m venv venv
+
+   ```bash
+   source venv/bin/activate
+
+   ```bash
+   pip install -r requirements.txt
+
+3. Run the app:
+   ```bash
+   streamlit run app.py
+
+   
+
+
+   
