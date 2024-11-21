@@ -1,5 +1,3 @@
-# HackSoccer
- 
 # Soccer Team Performance Dashboard
 
 ## Overview
