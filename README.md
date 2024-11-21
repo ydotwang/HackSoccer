@@ -9,6 +9,37 @@ We started by researching team dynamics through video analysis and reading relev
 Coaches and staff can leverage this dashboard to gain deeper insights into their team's performance. By visualizing trends and comparing with other teams, coaching staff can make data-backed decisions that guide training sessions, game strategies, and player development.
 
 ## Project Walkthrough
+## Step 1: Data Exploration and Machine Learning
+### Objective
+Predict match outcomes and evaluate the impact of key features on team performance, later implemented in the dashboard.
+
+### Key Activities
+1. **Logistic Regression for Outcome Prediction**
+   - Built a logistic regression model to predict match results (win, lose, or draw).
+   - Conducted sensitivity analysis to determine the effect of features such as shots, passing accuracy, and defensive stats on win rate.
+
+2. **Model Training and Evaluation**
+   - Utilized **scikit-learn** for preprocessing, including feature scaling and train-test splitting.
+   - Evaluated model performance using the following metrics:
+     - **Accuracy**
+     - **Precision**
+     - **Recall**
+     - **F1-Score**
+     - **ROC-AUC**
+
+3. **Data Visualization**
+   - Developed interactive visualizations with **Plotly** to interpret data trends and model performance:
+     - **Confusion Matrix**: Visualized model predictions.
+     - **Feature Importance Plot**: Highlighted key variables affecting predictions.
+     - **Correlation Heatmap**: Examined relationships between features.
+
+4. **Dynamic Analysis**
+   - Integrated filters to analyze match data for specific teams or seasons.
+   - Provided insights on performance metrics such as shots, defensive stats, and passing accuracy.
+
+---
+
+## Step 2: Interactive Dashboard Development
 We developed an interactive dashboard for the **Northwestern Men's Soccer** coaching staff to customize teams and seasons for a more in-depth analysis of team performance. Hosted on **Streamlit**, the dashboard features three main sections:
 
 1. **Team Analysis**  
