@@ -57,21 +57,13 @@ To use this dashboard:
 2. Set up:
    ```bash
    python3 --version
-   
-   ```bash
    python3 -m venv venv
-
-   ```bash
    source venv/bin/activate
 
+3. Install the requirements.txt
    ```bash
    pip install -r requirements.txt
 
-3. Run the app:
+4. Run the app:
    ```bash
    streamlit run app.py
-
-   
-
-
-   
