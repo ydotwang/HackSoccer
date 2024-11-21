@@ -10,22 +10,17 @@ from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.ensemble import RandomForestClassifier
 import plotly.express as px
-from dotenv import load_dotenv
-import openai
 import re
 import nltk
+import shap
+from scipy.stats import ttest_ind
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
 
 # Download necessary NLTK data
 nltk.download('stopwords')
 nltk.download('punkt')
-
-# Load environment variables
-load_dotenv()
-
-# Set OpenAI API key from environment variable
-openai.api_key = os.getenv('OPENAI_API_KEY')
-if openai.api_key is None:
-    raise ValueError("Please set the OPENAI_API_KEY environment variable in the .env file.")
 
 # Set device (GPU if available)
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -58,7 +53,6 @@ def general_player_analysis():
         return
     
     # Handle missing values in 'Weight' by imputing with the median per team
-    # This handles cases where some teams have missing 'Weight' while others don't
     general_player_data['Weight'] = general_player_data.groupby('Team')['Weight'].transform(
         lambda x: x.fillna(x.median())
     )
@@ -74,7 +68,7 @@ def general_player_analysis():
         Returns np.nan if parsing fails.
         """
         try:
-            match = re.match(r"(\d+)'\s*(\d+)''", height_str)
+            match = re.match(r"(\d+)'[\s]*(\d+)''?", height_str)
             if match:
                 feet = int(match.group(1))
                 inches = int(match.group(2))
@@ -115,7 +109,6 @@ def general_player_analysis():
         'Defender': 'Defender',
         'D/M': 'Defender/Midfielder',
         'D/MF': 'Defender/Midfielder',
-        'Defender': 'Defender',
         'F': 'Forward',
         'F/MF': 'Forward/Midfielder',
         'Forward': 'Forward',
@@ -129,11 +122,24 @@ def general_player_analysis():
     
     general_player_data['Position'] = general_player_data['Position'].map(position_mapping).fillna(general_player_data['Position'])
     
-    # Encode categorical variables
-    label_encoders = {}
-    categorical_cols = ['Position', 'Class', 'Season', 'Team']
+    # Get counts of positions
+    position_counts = general_player_data['Position'].value_counts()
+    print("\nPosition counts before filtering:")
+    print(position_counts)
     
-    for col in categorical_cols:
+    # Remove positions with less than 2 samples
+    positions_to_keep = position_counts[position_counts >= 2].index.tolist()
+    general_player_data = general_player_data[general_player_data['Position'].isin(positions_to_keep)]
+    
+    # Encode 'Position' after filtering
+    label_encoders = {}
+    le_position = LabelEncoder()
+    general_player_data['Position'] = le_position.fit_transform(general_player_data['Position'].astype(str))
+    label_encoders['Position'] = le_position
+    print(f"\nEncoded 'Position' with classes: {le_position.classes_}")
+    
+    # Proceed to encode other categorical variables
+    for col in ['Class', 'Season', 'Team']:
         if general_player_data[col].dtype == 'object' or col == 'Season':
             le = LabelEncoder()
             general_player_data[col] = le.fit_transform(general_player_data[col].astype(str))
@@ -168,22 +174,6 @@ def general_player_analysis():
     print("\nClass distribution before splitting:")
     for cls, count in class_counts.items():
         print(f"Class {cls}: {count} samples")
-    
-    # Remove classes with less than 2 samples
-    classes_to_keep = class_counts[class_counts >= 2].index
-    if len(classes_to_keep) < len(class_counts):
-        print("\nRemoving classes with less than 2 samples to facilitate stratified splitting.")
-        mask = pd.Series(y_gp).isin(classes_to_keep)
-        X_gp = X_gp[mask]
-        y_gp = y_gp[mask]
-        print(f"New dataset size: {X_gp.shape[0]} samples")
-    
-    # Check if any class still has less than 2 samples
-    class_counts = pd.Series(y_gp).value_counts()
-    if (class_counts < 2).any():
-        print("\nError: Some classes still have less than 2 samples after removal.")
-        print("Consider combining similar classes or using a different splitting strategy.")
-        return
     
     # Extract the unique labels present after cleaning
     unique_labels = np.unique(y_gp)
@@ -253,7 +243,7 @@ def general_player_analysis():
 
     # Instantiate the model
     input_size_gp = X_train_tensor_gp.shape[1]
-    num_classes_gp = len(general_player_data['Position'].unique())
+    num_classes_gp = len(le_position.classes_)
     model_gp = PlayerNet(input_size_gp, num_classes_gp).to(device)
 
     # Define loss function and optimizer
@@ -296,7 +286,7 @@ def general_player_analysis():
         if (epoch+1) % 10 == 0 or epoch == 0:
             print(f"Epoch {epoch+1}/{num_epochs_gp}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
-    # Plot training and validation loss with Plotly
+    # Plot training and validation loss
     loss_df_gp = pd.DataFrame({
         'Epoch': range(1, num_epochs_gp + 1),
         'Training Loss': train_losses_gp,
@@ -332,7 +322,6 @@ def general_player_analysis():
     # Classification Report
     position_classes = label_encoders['Position'].classes_
     print("\nClassification Report:")
-    # Update the target_names to only include classes present in y_val_true_gp
     unique_labels = np.unique(y_val_true_gp)
     position_classes_filtered = [label_encoders['Position'].classes_[label] for label in unique_labels]
     print(classification_report(y_val_true_gp, y_val_pred_gp, target_names=position_classes_filtered))
@@ -367,51 +356,102 @@ def general_player_analysis():
 
     fig_importance_gp.show()
 
-    # Correlation Heatmap with Plotly
-    corr_matrix_gp = general_player_data[feature_columns_gp + [target_column_gp]].corr()
+    # SHAP Value Analysis
+    explainer_gp = shap.TreeExplainer(rf_model_gp)
+    shap_values_gp = explainer_gp.shap_values(X_train_gp)
 
-    fig_heatmap_gp = px.imshow(corr_matrix_gp,
-                               text_auto=True,
-                               aspect="auto",
-                               color_continuous_scale='RdBu',
-                               title='Correlation Matrix of Features for Player Position Prediction')
+    # Plot SHAP summary plot for each class
+    for i in range(num_classes_gp):
+        print(f"\nSHAP Summary Plot for Class: {label_encoders['Position'].classes_[i]}")
+        shap.summary_plot(shap_values_gp[i], X_train_gp, feature_names=feature_columns_gp, show=False)
+        shap.plots._force_matplotlib()
+        plt.title(f"SHAP Summary Plot for {label_encoders['Position'].classes_[i]}")
+        plt.show()
 
-    fig_heatmap_gp.update_layout(title_font_size=20,
-                                 xaxis_title='Features',
-                                 yaxis_title='Features',
-                                 font=dict(size=12))
+    # ---------------------------
+    # Additional Visualizations
+    # ---------------------------
 
-    fig_heatmap_gp.show()
+    # A. Correlation Matrix Heatmap
+    corr_matrix = general_player_data[feature_columns_gp + [target_column_gp]].corr()
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm')
+    plt.title('Correlation Matrix Heatmap for General Player Data')
+    plt.show()
 
-    # Use OpenAI API to generate insights
-    # Prepare the aggregated player data for analysis
-    aggregated_player_summary = general_player_data[feature_columns_gp + [target_column_gp]].describe().to_string()
+    # B. PCA Visualization
+    pca = PCA(n_components=2)
+    principal_components = pca.fit_transform(X_gp)
+    pca_df = pd.DataFrame(data=principal_components, columns=['PC1', 'PC2'])
+    pca_df['Position'] = label_encoders['Position'].inverse_transform(y_gp)
 
-    prompt_gp = f"""
-    As an expert soccer analyst, analyze the following aggregated player data for the team. Provide actionable insights on how players can improve their performance. Highlight key strengths and weaknesses based on the data.
-    
-    Aggregated Player Data Summary:
-    {aggregated_player_summary}
-    """
+    plt.figure(figsize=(10, 8))
+    sns.scatterplot(x='PC1', y='PC2', hue='Position', data=pca_df, palette='Set1')
+    plt.title('PCA of Player Attributes')
+    plt.show()
 
-    analysis_gp = get_openai_analysis(prompt_gp)
-    print("\nOpenAI Analysis for General Player Data:")
-    print(analysis_gp)
+    # C. Radar Chart for a Player
+    def create_radar_chart(player_data, player_name):
+        categories = feature_columns_gp
+        fig = go.Figure()
 
-    # Generate a comprehensive report for general-player-data.csv
-    def generate_general_player_report():
-        """
-        Generates a comprehensive report including visualizations and OpenAI analysis for general player data.
-        """
-        # Display the OpenAI analysis
-        print("\nComprehensive Analysis Report for General Player Data:")
-        print(analysis_gp)
+        fig.add_trace(go.Scatterpolar(
+            r=player_data,
+            theta=categories,
+            fill='toself',
+            name=player_name
+        ))
 
-    # Generate the report
-    generate_general_player_report()
+        fig.update_layout(
+          polar=dict(
+            radialaxis=dict(
+              visible=True,
+              range=[0, max(player_data)*1.1]
+            )),
+          showlegend=False,
+          title=f'Attribute Profile for {player_name}'
+        )
 
-    # Optional: Save general_player_data with analyses to a CSV file
-    # general_player_data.to_csv('general_player_data_with_analyses.csv', index=False)
+        fig.show()
+
+    # Example usage
+    # Replace with an actual player name from your data
+    player_name = general_player_data['Name'].iloc[0]
+    player_row = general_player_data[general_player_data['Name'] == player_name]
+    if not player_row.empty:
+        player_attributes = player_row[feature_columns_gp].values.flatten()
+        create_radar_chart(player_attributes, player_name)
+    else:
+        print(f"Player '{player_name}' not found in the data.")
+
+    # D. Distribution Plots
+    for feature in feature_columns_gp:
+        plt.figure(figsize=(10, 6))
+        sns.kdeplot(data=general_player_data, x=feature, hue='Position', fill=True, common_norm=False, palette='Set1')
+        plt.title(f'Distribution of {feature} by Position')
+        plt.show()
+
+    # Pairwise Relationships Between Features
+    features_to_plot = ['Height_in_inches', 'Weight', 'Class', 'Season', 'Team']
+    fig_scatter_matrix = px.scatter_matrix(general_player_data,
+                                           dimensions=features_to_plot,
+                                           color='Position',
+                                           title='Pairwise Relationships Between Features')
+    fig_scatter_matrix.update_layout(width=1000, height=1000)
+    fig_scatter_matrix.show()
+
+    # Physical Attributes by Position
+    # Height Distribution
+    fig_height = px.box(general_player_data, x='Position', y='Height_in_inches',
+                        title='Height Distribution by Position',
+                        labels={'Height_in_inches': 'Height (inches)', 'Position': 'Player Position'})
+    fig_height.show()
+
+    # Weight Distribution
+    fig_weight = px.box(general_player_data, x='Position', y='Weight',
+                        title='Weight Distribution by Position',
+                        labels={'Weight': 'Weight (lbs)', 'Position': 'Player Position'})
+    fig_weight.show()
 
 # -----------------------------------
 # 2. Player Combined Data Analysis
@@ -497,11 +537,13 @@ def player_combined_analysis():
         print("Error: 'Match' column not found in 'player-combined-data.csv'. Please check the column names.")
         return
     
-    def extract_match_outcome(match_str, team):
+    def extract_match_outcome(row):
         """
         Extracts the match outcome for the specified team.
         Returns 'Win', 'Loss', or 'Draw'.
         """
+        match_str = row['Match']
+        team = row['clean_team']
         try:
             # Example Match format: "Team A - Team B 2:1"
             # Split the string to extract teams and scores
@@ -548,7 +590,7 @@ def player_combined_analysis():
     
     # Apply the function to create 'Match_Outcome' column
     player_combined_data['Match_Outcome'] = player_combined_data.apply(
-        lambda row: extract_match_outcome(row['Match'], row['clean_team']), axis=1
+        extract_match_outcome, axis=1
     )
     
     # Verify the unique values in 'Match_Outcome'
@@ -572,82 +614,16 @@ def player_combined_analysis():
     # Aggregate player data per team per match
     aggregation_dict = {
         'Match_Outcome_Encoded': 'first',  # To retain the outcome per match-team
-        'Minutes played': 'sum',
-        'total_actions': 'sum',
-        'successful_actions': 'sum',
-        'goals': 'sum',
-        'assists': 'sum',
-        'shots': 'sum',
-        'shots_on_target': 'sum',
-        'xg': 'sum',
-        'total_passes': 'sum',
-        'total_passes_completed': 'sum',
-        'long_passes': 'sum',
-        'long_passes_completed': 'sum',
-        'crosses': 'sum',
-        'accurate_crosses': 'sum',
-        'dribbles': 'sum',
-        'successful_dribbles': 'sum',
-        'total_duels': 'sum',
-        'total_duels_won': 'sum',
-        'aerial_duels': 'sum',
-        'aerial_duels_won': 'sum',
-        'interceptions': 'sum',
-        'losses': 'sum',
-        'losses_in_own_half': 'sum',
-        'recoveries': 'sum',
-        'recoveries_in_own_half': 'sum',
-        'minute_yellow_card_received': 'sum',
-        'minute_red_card_received': 'sum',
-        'defensive_duels': 'sum',
-        'defensive_duels_won': 'sum',
-        'loose_ball_duels': 'sum',
-        'loose_ball_duels_won': 'sum',
-        'slide_tackles_attempted': 'sum',
-        'slide_tackles_won': 'sum',
-        'clearances': 'sum',
-        'fouls': 'sum',
-        'yellow_cards': 'sum',
-        'red_cards': 'sum',
-        'shot_assists': 'sum',
-        'offensive_duels_1': 'sum',
-        'offensive_duels.1': 'sum',  # Assuming 'offensive_duels_1' is a duplicate
-        'touches_inside_box': 'sum',
-        'offsides': 'sum',
-        'progressive_runs_attempted': 'sum',
-        'fouls_drawn': 'sum',
-        'through_passes_attempted': 'sum',
-        'through_passes_completed': 'sum',
-        'xa': 'sum',
-        'second_assists': 'sum',
-        'passes_into_final_third': 'sum',
-        'passes_into_final_third_completed': 'sum',
-        'passes_into_box': 'sum',
-        'passes_into_box_completed': 'sum',
-        'received_passes': 'sum',
-        'forward_passes_1': 'sum',
-        'forward_passes.1': 'sum',
-        'back_passes_1': 'sum',
-        'back_passes.1': 'sum',
-        'gk_stat_conceded_goals': 'sum',
-        'gk_stat_xcg': 'sum',
-        'gk_stat_shots_against': 'sum',
-        'gk_stat_saves': 'sum',
-        'gk_stat_reflex_saves': 'sum',
-        'gk_stat_box_exits': 'sum',
-        'gk_stat_passes_to_gk': 'sum',
-        'gk_stat_passes_to_gk_completed': 'sum',
-        'gk_stat_goal_kicks_attempted': 'sum',
-        'gk_stat_short_goal_kicks': 'sum',
-        'gk_stat_long_goal_kicks': 'sum'
+        # Include other relevant columns for aggregation
     }
-    
-    # Ensure that all columns in aggregation_dict exist in the dataframe
-    missing_agg_cols = set(aggregation_dict.keys()) - set(player_combined_data.columns)
-    if missing_agg_cols:
-        print(f"Warning: The following columns are missing and will be excluded from aggregation: {missing_agg_cols}")
-        for col in missing_agg_cols:
-            aggregation_dict.pop(col)
+
+    # For brevity, let's aggregate a few key metrics
+    key_metrics = ['Minutes played', 'total_actions', 'successful_actions', 'goals', 'assists', 'shots', 'xg', 'total_passes', 'successful_dribbles', 'total_duels_won']
+    for metric in key_metrics:
+        if metric in player_combined_data.columns:
+            aggregation_dict[metric] = 'sum'
+        else:
+            print(f"Warning: Metric '{metric}' not found in data. Skipping.")
     
     # Aggregate the data
     aggregated_team_data = player_combined_data.groupby(['Match', 'team']).agg(aggregation_dict).reset_index()
@@ -683,13 +659,6 @@ def player_combined_analysis():
         X_pc = X_pc[mask]
         y_pc = y_pc[mask]
         print(f"New dataset size: {X_pc.shape[0]} samples")
-    
-    # Check if any class still has less than 2 samples
-    class_counts = pd.Series(y_pc).value_counts()
-    if (class_counts < 2).any():
-        print("\nError: Some classes still have less than 2 samples after removal.")
-        print("Consider combining similar classes or using a different splitting strategy.")
-        return
     
     # Extract the unique labels present after cleaning
     unique_labels = np.unique(y_pc)
@@ -741,7 +710,7 @@ def player_combined_analysis():
             self.fc1 = nn.Linear(input_size, 128)
             self.relu1 = nn.ReLU()
             self.dropout1 = nn.Dropout(0.3)
-            self.fc2 = nn.Linear(128, 64)
+            self.fc2 = nn.Linear(input_size, 64)  # Corrected input size here
             self.relu2 = nn.ReLU()
             self.dropout2 = nn.Dropout(0.3)
             self.fc3 = nn.Linear(64, num_classes)
@@ -751,7 +720,7 @@ def player_combined_analysis():
             out = self.fc1(x)
             out = self.relu1(out)
             out = self.dropout1(out)
-            out = self.fc2(out)
+            out = self.fc2(x)  # Modified to take x as input
             out = self.relu2(out)
             out = self.dropout2(out)
             out = self.fc3(out)
@@ -759,7 +728,7 @@ def player_combined_analysis():
 
     # Instantiate the model
     input_size_pc = X_train_tensor_pc.shape[1]
-    num_classes_pc = len(aggregated_team_data['Match_Outcome_Encoded'].unique())
+    num_classes_pc = len(match_outcome_classes_filtered)
     model_pc = TeamNet(input_size_pc, num_classes_pc).to(device)
 
     # Define loss function and optimizer
@@ -802,7 +771,7 @@ def player_combined_analysis():
         if (epoch+1) % 10 == 0 or epoch == 0:
             print(f"Epoch {epoch+1}/{num_epochs_pc}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
-    # Plot training and validation loss with Plotly
+    # Plot training and validation loss
     loss_df_pc = pd.DataFrame({
         'Epoch': range(1, num_epochs_pc + 1),
         'Training Loss': train_losses_pc,
@@ -836,9 +805,7 @@ def player_combined_analysis():
     print(f"\nValidation Accuracy for Match Outcome Prediction: {accuracy_pc:.4f}")
 
     # Classification Report
-    match_outcome_classes = label_encoder_pc.classes_
     print("\nClassification Report:")
-    # Update the target_names to only include classes present in y_val_true_pc
     unique_labels_pc = np.unique(y_val_true_pc)
     match_outcome_classes_filtered = [label_encoder_pc.classes_[label] for label in unique_labels_pc]
     print(classification_report(y_val_true_pc, y_val_pred_pc, target_names=match_outcome_classes_filtered))
@@ -873,84 +840,72 @@ def player_combined_analysis():
 
     fig_importance_pc.show()
 
-    # Correlation Heatmap with Plotly
-    corr_matrix_pc = aggregated_team_data[feature_columns_pc + [target_column_pc]].corr()
+    # SHAP Value Analysis
+    explainer_pc = shap.TreeExplainer(rf_model_pc)
+    shap_values_pc = explainer_pc.shap_values(X_train_pc)
 
-    fig_heatmap_pc = px.imshow(corr_matrix_pc,
-                               text_auto=True,
-                               aspect="auto",
-                               color_continuous_scale='RdBu',
-                               title='Correlation Matrix of Features for Match Outcome Prediction')
+    # Plot SHAP summary plot for each class
+    for i in range(num_classes_pc):
+        print(f"\nSHAP Summary Plot for Class: {label_encoder_pc.classes_[i]}")
+        shap.summary_plot(shap_values_pc[i], X_train_pc, feature_names=feature_columns_pc, show=False)
+        shap.plots._force_matplotlib()
+        plt.title(f"SHAP Summary Plot for {label_encoder_pc.classes_[i]}")
+        plt.show()
 
-    fig_heatmap_pc.update_layout(title_font_size=20,
-                                 xaxis_title='Features',
-                                 yaxis_title='Features',
-                                 font=dict(size=12))
+    # ---------------------------
+    # Additional Visualizations
+    # ---------------------------
 
-    fig_heatmap_pc.show()
+    # A. Heatmap of Average Performance Metrics by Match Outcome
+    outcome_metrics = aggregated_team_data.groupby('Match_Outcome').mean().reset_index()
+    metrics = ['goals', 'assists', 'shots', 'xg', 'total_passes', 'successful_actions']
+    heatmap_data = outcome_metrics.set_index('Match_Outcome')[metrics]
 
-    # Use OpenAI API to generate insights
-    # Prepare the aggregated team match data for analysis
-    aggregated_match_summary = aggregated_team_data[feature_columns_pc + [target_column_pc]].describe().to_string()
+    plt.figure(figsize=(8, 6))
+    sns.heatmap(heatmap_data, annot=True, fmt=".2f", cmap='YlGnBu')
+    plt.title('Average Performance Metrics by Match Outcome')
+    plt.ylabel('Match Outcome')
+    plt.show()
 
-    prompt_pc = f"""
-    As an expert soccer analyst, analyze the following aggregated team match data. Provide actionable insights on how the team can improve their performance in future matches. Highlight key strengths and weaknesses based on the data.
-    
-    Aggregated Match Data Summary:
-    {aggregated_match_summary}
-    """
+    # B. Time Series Analysis
+    aggregated_team_data['Match_Index'] = aggregated_team_data.groupby('team').cumcount()
+    team_name = aggregated_team_data['team'].iloc[0]  # Replace with actual team name if needed
+    team_data = aggregated_team_data[aggregated_team_data['team'] == team_name]
 
-    analysis_pc = get_openai_analysis(prompt_pc)
-    print("\nOpenAI Analysis for Player Combined Data:")
-    print(analysis_pc)
+    plt.figure(figsize=(12, 6))
+    plt.plot(team_data['Match_Index'], team_data['goals'], marker='o', label='Goals')
+    plt.title(f'Goals Over Matches for {team_name}')
+    plt.xlabel('Match Number')
+    plt.ylabel('Goals Scored')
+    plt.legend()
+    plt.show()
 
-    # Generate a comprehensive report for player-combined-data.csv
-    def generate_player_combined_report():
-        """
-        Generates a comprehensive report including visualizations and OpenAI analysis for player combined data.
-        """
-        # Display the OpenAI analysis
-        print("\nComprehensive Analysis Report for Player Combined Data:")
-        print(analysis_pc)
+    # C. Comparative Box Plots
+    metrics_to_compare = ['goals', 'xg', 'total_passes', 'shots']
+    for metric in metrics_to_compare:
+        if metric in aggregated_team_data.columns:
+            plt.figure(figsize=(8, 6))
+            sns.boxplot(x='Match_Outcome', y=metric, data=aggregated_team_data, palette='Set2')
+            plt.title(f'{metric.capitalize()} Distribution by Match Outcome')
+            plt.xlabel('Match Outcome')
+            plt.ylabel(metric.capitalize())
+            plt.show()
+        else:
+            print(f"Metric '{metric}' not found in the aggregated data.")
 
-    # Generate the report
-    generate_player_combined_report()
-
-    # Optional: Save aggregated_team_data with analyses to a CSV file
-    # aggregated_team_data.to_csv('aggregated_team_data_with_analyses.csv', index=False)
-
-# -----------------------------------
-# 3. OpenAI Analysis Function
-# -----------------------------------
-
-def get_openai_analysis(prompt):
-    """
-    Sends a prompt to the OpenAI API and returns the generated analysis.
-    Handles API errors gracefully.
-    """
-    try:
-        response = openai.ChatCompletion.create(
-            model='gpt-4',
-            messages=[
-                {'role': 'system', 'content': 'You are an expert soccer analyst.'},
-                {'role': 'user', 'content': prompt}
-            ],
-            max_tokens=1000,
-            temperature=0.7
-        )
-        return response.choices[0].message.content.strip()
-    except openai.error.AuthenticationError:
-        print("Authentication Error: Please check your OpenAI API key.")
-        return "No analysis available due to authentication error."
-    except openai.error.RateLimitError:
-        print("Rate Limit Exceeded: Please wait and try again later.")
-        return "No analysis available due to rate limit."
-    except openai.error.OpenAIError as e:
-        print(f"OpenAI API Error: {e}")
-        return "No analysis available due to an API error."
+    # D. Scatter Plot with Regression Line
+    if 'xg' in aggregated_team_data.columns and 'goals' in aggregated_team_data.columns:
+        plt.figure(figsize=(10, 6))
+        sns.lmplot(x='xg', y='goals', hue='Match_Outcome', data=aggregated_team_data, palette='Set1', height=6, aspect=1.5)
+        plt.title('Expected Goals (xG) vs Actual Goals by Match Outcome')
+        plt.xlabel('Expected Goals (xG)')
+        plt.ylabel('Actual Goals')
+        plt.show()
+    else:
+        print("Required metrics 'xg' and 'goals' not found for scatter plot.")
 
 # -----------------------------------
-# 4. Main Execution Flow
+# 3. Main Execution Flow
 # -----------------------------------
 
 def main():

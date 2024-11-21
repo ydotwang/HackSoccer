@@ -216,7 +216,7 @@ def main():
         "mean_pass_per_poss", "match_tempo"
     ]
     # Now remove 'counters' from feature_columns
-    feature_columns.remove('counters')  # Remove 'counters' as per user request
+    feature_columns.remove('counters')  
 
     target_column = "win"
 
@@ -356,7 +356,7 @@ def main():
     shots_box_fig.show()
 
     # Scatter Plot of Key Features vs Outcome with Plotly
-    key_features = ['sot', 'goals_against', 'ppda']  # Removed 'pass_success_rate'
+    key_features = ['sot', 'goals_against', 'ppda', 'pass_success_rate']  # Removed 'pass_success_rate'
 
     for feature in key_features:
         scatter_fig = px.scatter(
