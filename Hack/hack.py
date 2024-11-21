@@ -2,7 +2,6 @@
 import os
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -11,10 +10,9 @@ from sklearn.preprocessing import StandardScaler
 from dotenv import load_dotenv
 import openai
 import re
-import seaborn as sns
+import plotly.express as px
 from sklearn.metrics import accuracy_score, classification_report
 from sklearn.ensemble import RandomForestClassifier
-from collections import Counter
 import nltk
 from nltk.corpus import stopwords
 from nltk.tokenize import word_tokenize
@@ -36,8 +34,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Load the datasets
 datasets = {
-    "ACC": pd.read_csv('acc-combined-data.csv'),
-    "BigTen": pd.read_csv('big-ten-combined-data.csv')
+    "ACC": pd.read_csv('./Hack/acc-combined-data.csv'),
+    "BigTen": pd.read_csv('./Hack/big-ten-combined-data.csv')
 }
 
 # Combine relevant datasets (e.g., ACC and BigTen for team-level analysis)
@@ -119,6 +117,9 @@ def infer_win_loss(row):
 
 # Apply the function to create a 'win' column
 team_data_filtered['win'] = team_data_filtered.apply(infer_win_loss, axis=1)
+
+# Map 'win' to 'Outcome' for better readability and color mapping
+team_data_filtered['Outcome'] = team_data_filtered['win'].map({0: 'Loss/Draw', 1: 'Win'})
 
 # Verify that 'win' column contains only 0 and 1
 print('Unique values in win column:', team_data_filtered['win'].unique())
@@ -246,17 +247,26 @@ for epoch in range(num_epochs):
 
     print(f"Epoch {epoch+1}/{num_epochs}, Train Loss: {epoch_train_loss:.4f}, Val Loss: {epoch_val_loss:.4f}")
 
-# Plot training and validation loss with colors
-plt.figure(figsize=(12, 6))
-plt.plot(range(1, num_epochs + 1), train_losses, label="Training Loss", color='blue', linewidth=2)
-plt.plot(range(1, num_epochs + 1), val_losses, label="Validation Loss", color='orange', linewidth=2)
-plt.title(f"Training and Validation Loss for {selected_team.title()}", fontsize=16)
-plt.xlabel("Epoch", fontsize=14)
-plt.ylabel("Loss", fontsize=14)
-plt.legend(fontsize=12)
-plt.grid(True, linestyle='--', alpha=0.5)
-plt.tight_layout()
-plt.show()
+# Plot training and validation loss with Plotly
+loss_df = pd.DataFrame({
+    'Epoch': range(1, num_epochs + 1),
+    'Training Loss': train_losses,
+    'Validation Loss': val_losses
+})
+
+fig = px.line(loss_df, x='Epoch', y=['Training Loss', 'Validation Loss'],
+              title=f"Training and Validation Loss for {selected_team.title()}",
+              labels={'value': 'Loss', 'variable': 'Loss Type'},
+              markers=True,
+              line_shape='linear')
+
+fig.update_layout(title_font_size=18,
+                  xaxis_title='Epoch',
+                  yaxis_title='Loss',
+                  legend_title_text='Loss Type',
+                  font=dict(size=14))
+
+fig.show()
 
 # Evaluate the model
 model.eval()
@@ -286,81 +296,118 @@ feature_importance_df = pd.DataFrame({
     'Importance': importances
 }).sort_values(by='Importance', ascending=True)
 
-# Plot feature importances with colors
-plt.figure(figsize=(10, 8))
-sns.barplot(x='Importance', y='Feature', data=feature_importance_df, palette='viridis')
-plt.title(f'Feature Importances from Random Forest for {selected_team.title()}', fontsize=16)
-plt.xlabel('Importance', fontsize=14)
-plt.ylabel('Features', fontsize=14)
-plt.tight_layout()
-plt.show()
+# Plot feature importances with Plotly
+fig = px.bar(feature_importance_df, x='Importance', y='Feature',
+             orientation='h',
+             title=f'Feature Importances from Random Forest for {selected_team.title()}',
+             labels={'Importance': 'Importance', 'Feature': 'Features'},
+             hover_data=['Importance'],
+             color='Feature',
+             color_discrete_sequence=px.colors.qualitative.Plotly)  # Using a Plotly qualitative palette
 
-# Correlation Heatmap with enhanced colors
+fig.update_layout(title_font_size=18,
+                  xaxis_title='Importance',
+                  yaxis_title='Features',
+                  showlegend=False,
+                  font=dict(size=14))
+
+fig.show()
+
+# Correlation Heatmap with Plotly
 # Calculate the correlation matrix
 corr_matrix = team_data_filtered[feature_columns + [target_column]].corr()
 
-# Generate a heatmap with better color mapping
-plt.figure(figsize=(16, 14))
-sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', linewidths=0.5)
-plt.title(f'Correlation Matrix of Features for {selected_team.title()}', fontsize=18)
-plt.xticks(rotation=45, fontsize=12)
-plt.yticks(rotation=0, fontsize=12)
-plt.tight_layout()
-plt.show()
+# Generate a heatmap with annotations and improved color palette
+fig = px.imshow(corr_matrix,
+                text_auto=True,
+                aspect="auto",
+                color_continuous_scale='RdBu',
+                title=f'Correlation Matrix of Features for {selected_team.title()}')
 
-# Performance Metrics Over Time with color gradients
+fig.update_layout(title_font_size=20,
+                  xaxis_title='Features',
+                  yaxis_title='Features',
+                  font=dict(size=12))
+
+fig.show()
+
+# Performance Metrics Over Time with Plotly
 # Sort data by date
 team_data_filtered = team_data_filtered.sort_values('date')
 
 # Plotting pass success rate over time with a color gradient
-plt.figure(figsize=(14, 7))
-plt.scatter(team_data_filtered['date'], team_data_filtered['pass_success_rate'], 
-            c=team_data_filtered['pass_success_rate'], cmap='viridis', s=100)
-plt.colorbar(label='Pass Success Rate (%)')
-plt.title(f'Pass Success Rate Over Time for {selected_team.title()}', fontsize=16)
-plt.xlabel('Date', fontsize=14)
-plt.ylabel('Pass Success Rate (%)', fontsize=14)
-plt.xticks(rotation=45)
-plt.grid(True, linestyle='--', alpha=0.5)
-plt.tight_layout()
-plt.show()
+fig = px.scatter(team_data_filtered, x='date', y='pass_success_rate',
+                 color='pass_success_rate',
+                 color_continuous_scale='Bluered_r',  # Diverging color scale
+                 title=f'Pass Success Rate Over Time for {selected_team.title()}',
+                 labels={'date': 'Date', 'pass_success_rate': 'Pass Success Rate (%)'},
+                 size_max=15)
 
-# Comparison of Wins and Losses with colors
-# Boxplot of shots in wins vs losses with palette
-plt.figure(figsize=(10, 6))
-sns.boxplot(x='win', y='shots', data=team_data_filtered, palette='Set2')
-plt.title(f'Number of Shots in Wins vs Losses for {selected_team.title()}', fontsize=16)
-plt.xlabel('Win', fontsize=14)
-plt.ylabel('Number of Shots', fontsize=14)
-plt.xticks([0, 1], ['Loss/Draw', 'Win'], fontsize=12)
-plt.grid(True, linestyle='--', alpha=0.5)
-plt.tight_layout()
-plt.show()
+fig.update_traces(marker=dict(size=12, line=dict(width=1, color='black')))
+fig.update_layout(title_font_size=18,
+                  xaxis_title='Date',
+                  yaxis_title='Pass Success Rate (%)',
+                  font=dict(size=14))
 
-# Scatter Plot of Key Features vs Win with hue
+fig.show()
+
+# Comparison of Wins and Losses with Plotly
+# Boxplot of shots in wins vs losses with Plotly
+fig = px.box(team_data_filtered, x='Outcome', y='shots',
+             color='Outcome',
+             color_discrete_map={'Loss/Draw': 'rgba(0, 0, 255, 0.6)', 'Win': 'rgba(255, 0, 0, 0.6)'},
+             title=f'Number of Shots in Wins vs Losses for {selected_team.title()}',
+             labels={'shots': 'Number of Shots', 'Outcome': 'Outcome'},
+             points="all")  # Show all points
+
+fig.update_layout(title_font_size=18,
+                  xaxis_title='Outcome',
+                  yaxis_title='Number of Shots',
+                  showlegend=False,
+                  font=dict(size=14))
+
+fig.show()
+
+# Scatter Plot of Key Features vs Outcome with Plotly
 key_features = ['sot', 'pass_success_rate', 'goals_against', 'ppda']
 
 for feature in key_features:
-    plt.figure(figsize=(10, 6))
-    sns.scatterplot(x=feature, y='win', hue='win', data=team_data_filtered, palette='Set1', s=100)
-    plt.title(f'{feature} vs Win for {selected_team.title()}', fontsize=16)
-    plt.xlabel(feature.replace('_', ' ').title(), fontsize=14)
-    plt.ylabel('Win (1) or Loss/Draw (0)', fontsize=14)
-    plt.legend(title='Outcome', labels=['Loss/Draw', 'Win'], fontsize=12)
-    plt.grid(True, linestyle='--', alpha=0.5)
-    plt.tight_layout()
-    plt.show()
+    fig = px.scatter(team_data_filtered, x=feature, y='Outcome',
+                     color='Outcome',
+                     color_discrete_map={'Loss/Draw': 'rgba(0, 0, 255, 0.6)', 'Win': 'rgba(255, 0, 0, 0.6)'},
+                     title=f'{feature.replace("_", " ").title()} vs Outcome for {selected_team.title()}',
+                     labels={'Outcome': 'Outcome', feature: feature.replace('_', ' ').title()},
+                     hover_data=[feature])
 
-# Histograms of Key Features by Outcome with colors
+    fig.update_traces(marker=dict(size=12, line=dict(width=1, color='black')))
+    fig.update_layout(title_font_size=18,
+                      xaxis_title=feature.replace('_', ' ').title(),
+                      yaxis_title='Outcome',
+                      legend_title_text='Outcome',
+                      font=dict(size=14))
+
+    fig.show()
+
+# Histograms of Key Features by Outcome with Plotly
 for feature in key_features:
-    plt.figure(figsize=(10, 6))
-    sns.histplot(data=team_data_filtered, x=feature, hue='win', multiple='stack', palette='Set1', bins=15)
-    plt.title(f'Distribution of {feature.replace("_", " ").title()} by Outcome for {selected_team.title()}', fontsize=16)
-    plt.xlabel(feature.replace('_', ' ').title(), fontsize=14)
-    plt.ylabel('Count', fontsize=14)
-    plt.legend(title='Outcome', labels=['Loss/Draw', 'Win'], fontsize=12)
-    plt.tight_layout()
-    plt.show()
+    fig = px.histogram(team_data_filtered, x=feature, color='Outcome',
+                       color_discrete_map={'Loss/Draw': 'rgba(0, 0, 255, 06)', 'Win': 'rgba(255, 0, 0, 0.6)'},
+                       title=f'Distribution of {feature.replace("_", " ").title()} by Outcome for {selected_team.title()}',
+                       labels={'Outcome': 'Outcome', feature: feature.replace('_', ' ').title()},
+                       nbins=15
+                       )  # Changed to 'overlay' for better visibility
+
+    # Add black lines between histogram bars
+    fig.update_traces(marker_line_color='black', marker_line_width=1)
+
+    # Removed opacity from layout to ensure black lines are visible
+    fig.update_layout(title_font_size=18,
+                      xaxis_title=feature.replace('_', ' ').title(),
+                      yaxis_title='Count',
+                      legend_title_text='Outcome',
+                      font=dict(size=14))
+
+    fig.show()
 
 # Use OpenAI API to generate insights
 # Prepare the aggregated match data for analysis
@@ -392,60 +439,39 @@ As an expert soccer analyst, analyze the following aggregated match data for {se
 def get_openai_analysis(prompt):
     """
     Sends a prompt to the OpenAI API and returns the generated analysis.
+    Handles API errors gracefully.
     """
-    response = openai.ChatCompletion.create(
-        model='gpt-4',
-        messages=[
-            {'role': 'system', 'content': 'You are an expert soccer analyst.'},
-            {'role': 'user', 'content': prompt}
-        ],
-        max_tokens=1000,
-        temperature=0.7
-    )
-    return response.choices[0].message.content.strip()
+    try:
+        response = openai.ChatCompletion.create(
+            model='gpt-4',
+            messages=[
+                {'role': 'system', 'content': 'You are an expert soccer analyst.'},
+                {'role': 'user', 'content': prompt}
+            ],
+            max_tokens=1000,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except openai.error.AuthenticationError:
+        print("Authentication Error: Please check your OpenAI API key.")
+        return "No analysis available due to authentication error."
+    except openai.error.RateLimitError:
+        print("Rate Limit Exceeded: Please wait and try again later.")
+        return "No analysis available due to rate limit."
+    except openai.error.OpenAIError as e:
+        print(f"OpenAI API Error: {e}")
+        return "No analysis available due to an API error."
 
 # Generate analysis using OpenAI API
-try:
-    analysis = get_openai_analysis(prompt)
-    print("\nOpenAI Analysis:")
-    print(analysis)
-except Exception as e:
-    print(f"Failed to generate analysis: {e}")
-
-# Text Analysis of OpenAI Analyses
-# Combine all analyses
-all_analyses = analysis
-
-# Tokenize and remove stopwords
-tokens = word_tokenize(all_analyses)
-tokens = [word.lower() for word in tokens if word.isalpha()]
-filtered_tokens = [word for word in tokens if word not in stopwords.words('english')]
-
-# Get the most common words
-word_freq = Counter(filtered_tokens)
-common_words = word_freq.most_common(20)
-
-# Display the most common words
-print("\nMost Common Words in Analysis:")
-for word, freq in common_words:
-    print(f"{word}: {freq}")
+analysis = get_openai_analysis(prompt)
+print("\nOpenAI Analysis:")
+print(analysis)
 
 # Generate a comprehensive report for the team
 def generate_team_report():
     """
     Generates a comprehensive report including visualizations and OpenAI analysis.
     """
-    # Plot key metrics comparison
-    metrics = ['shots', 'sot', 'pass_success_rate', 'goals_against']
-    plt.figure(figsize=(12, 8))
-    sns.barplot(x='win', y='shots', data=team_data_filtered, palette='Set2')
-    plt.title(f'Number of Shots in Wins vs Losses for {selected_team.title()}', fontsize=16)
-    plt.xlabel('Outcome', fontsize=14)
-    plt.ylabel('Number of Shots', fontsize=14)
-    plt.xticks([0, 1], ['Loss/Draw', 'Win'], fontsize=12)
-    plt.tight_layout()
-    plt.show()
-
     # Display the OpenAI analysis
     print("\nComprehensive Analysis Report:")
     print(analysis)
