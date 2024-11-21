@@ -7,3 +7,6 @@ seaborn
 plotly
 shap
 streamlit
+dotenv
+openai
+nltk
