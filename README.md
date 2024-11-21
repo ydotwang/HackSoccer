@@ -13,12 +13,15 @@ We developed an interactive dashboard for the **Northwestern Men's Soccer** coac
 
 1. **Team Analysis**  
    Provides an overview of team performance metrics, including detailed time-series analysis, sub-category metrics, and player performance breakdowns.
+   ![Team Analysis Tab Screenshot](img/team.png)
 
-2. **Comparison Tool**  
+3. **Comparison Tool**  
    Enables performance comparison with other teams, helping coaches identify areas where their team excels or needs improvement.
+   ![Comparison Tool Tab Screenshot](img/compare.png)
 
-3. **Information Page**  
+5. **Information Page**  
    Offers additional insights and context for the data, including background on the metrics used and how they are calculated.
+   ![Info Tab Screenshot](img/info.png)
 
 ## Future Implications
 - **Expanded Data**: Incorporating additional data formats to further refine the analysis and provide more granular insights.
