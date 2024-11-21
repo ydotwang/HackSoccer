@@ -25,7 +25,7 @@ st.sidebar.markdown("""
 
 if page == 'Team Analysis':
     st.title('Team Analysis')
-    df = pd.read_csv('team-data/big-ten-combined-data.csv')
+    df = pd.read_csv('big-ten-combined-data.csv')
     
     # Convert date column to datetime format
     df['date'] = pd.to_datetime(df['date'], format='%m/%d/%y')
